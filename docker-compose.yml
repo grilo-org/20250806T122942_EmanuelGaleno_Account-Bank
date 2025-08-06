@@ -1,0 +1,14 @@
+version: '3.1'
+
+services:
+  postgresdb:
+    image: postgres:latest
+    container_name: postgresbank
+    environment:
+      POSTGRES_USER: bankduell
+      POSTGRES_PASSWORD: bankduell
+      POSTGRES_DB: postgresbank
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./src/main/resources/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d  # script SQL de insert

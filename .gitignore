@@ -1,0 +1,24 @@
+# Arquivo gerado automaticamente para prevenir o commit de segredos.
+
+# Arquivos de ambiente
+.env
+*.env
+env.js
+
+# Arquivos de segredos e credenciais
+secrets.js
+secrets.json
+credentials.json
+cypress.env.json
+
+# Arquivos de configuração do Postman
+*.postman_environment.json
+*.postman_collection.json
+
+# Arquivos de propriedades Java/Spring
+application.properties
+application.yml
+
+# Certificados e chaves
+*.pem
+*.p12
