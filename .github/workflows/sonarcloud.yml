@@ -1,0 +1,117 @@
+name: "SonarCloud Analysis"
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch: {}
+
+jobs:
+  sonar-scan:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Necessário para pegar o histórico de commits
+
+      - name: Detectar a Raiz do Projeto (Universal)
+        id: find-root
+        shell: bash
+        run: |
+          MARKER_FILES=(
+            "pubspec.yaml" "package.json" "composer.json" 
+            "pom.xml" "go.mod" "Gemfile" 
+            "pyproject.toml" "Package.swift" "*.csproj"
+            "build.gradle" "build.gradle.kts" "requirements.txt"
+          )
+          PROJECT_DIR="."
+          
+          for marker in "${MARKER_FILES[@]}"; do
+            path=$(find . -not -path "./.git/*" -name "$marker" -print -quit)
+            if [ -n "$path" ]; then
+              PROJECT_DIR=$(dirname "$path")
+              echo "Projeto detectado em: $PROJECT_DIR (marcador: $marker)"
+              break
+            fi
+          done
+          
+          echo "Diretório final do projeto: $PROJECT_DIR"
+          echo "PROJECT_PATH=$PROJECT_DIR" >> $GITHUB_ENV
+
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # Passo para obter o ano do último commit para inferir a versão do Gradle
+      - name: Get last commit year
+        id: get_year
+        run: echo "year=$(git log -1 --format=%cd --date=format:%Y)" >> $GITHUB_OUTPUT
+
+      - name: Build Project (Maven or Gradle)
+        working-directory: ${{ env.PROJECT_PATH }}
+        shell: bash
+        run: |
+          if [ -f "pom.xml" ]; then
+            echo "Maven project detected. Building with mvn..."
+            mvn clean compile -DskipTests
+            echo "SONAR_BINARIES_PATH=target/classes" >> $GITHUB_ENV
+            exit 0 # Sai com sucesso após o build do Maven
+          fi
+
+          if [ ! -f "build.gradle" ] && [ ! -f "build.gradle.kts" ]; then
+            echo "No build file found. Skipping build."
+            echo "SONAR_BINARIES_PATH=." >> $GITHUB_ENV
+            exit 0 # Sai com sucesso se não for Maven nem Gradle
+          fi
+
+          # LÓGICA HÍBRIDA: Tenta usar o wrapper primeiro.
+          if [ -f "./gradlew" ]; then
+            echo "Gradle Wrapper detectado. Usando a versão do projeto..."
+            chmod +x ./gradlew
+            ./gradlew build -x test
+          else
+            # PLANO B: Se não houver wrapper, usa a versão inferida pela data do commit.
+            echo "Gradle Wrapper NÃO detectado. Usando o Gradle do sistema como fallback."
+            echo "NEEDS_FALLBACK_GRADLE=true" >> $GITHUB_ENV
+          fi
+          echo "SONAR_BINARIES_PATH=build/classes/java/main" >> $GITHUB_ENV
+
+      # PASSO CONDICIONAL: Instala a versão correta do Gradle com base no ano
+      - name: Setup Gradle by Year (Fallback)
+        if: env.NEEDS_FALLBACK_GRADLE == 'true'
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          # Seleciona a versão do Gradle com base no ano do último commit
+          gradle-version: ${{ (steps.get_year.outputs.year >= 2024 && '8.4') || (steps.get_year.outputs.year >= 2022 && '7.6.3') || (steps.get_year.outputs.year == 2021 && '7.4.2') || '6.7.1' }}
+          # MUDANÇA AQUI: Desabilita o cache para aumentar a confiabilidade
+          cache-enabled: false
+
+      # PASSO CONDICIONAL: Executa o build com o Gradle do sistema (fallback)
+      - name: Run Gradle Build (Fallback)
+        if: env.NEEDS_FALLBACK_GRADLE == 'true'
+        working-directory: ${{ env.PROJECT_PATH }}
+        shell: bash
+        run: |
+          echo "Executando build com a versão do Gradle inferida pelo ano do projeto..."
+          gradle build -x test
+
+
+      - name: SonarCloud Scan (Universal)
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: ${{ env.PROJECT_PATH }}
+          args: >
+            -Dsonar.projectKey=grilo-org_20250806T122942_EmanuelGaleno_Account-Bank
+            -Dsonar.organization=grilo-org
+
+            -Dsonar.java.binaries=${{ env.SONAR_BINARIES_PATH }}
+            -Dsonar.sources=src/main
+            -X
+
